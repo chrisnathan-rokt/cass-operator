@@ -910,6 +910,9 @@ func (dc *CassandraDatacenter) LabelResourceName() string {
 	if dc.DatacenterNameStatus() {
 		return CleanupForKubernetes(*dc.Status.DatacenterName)
 	}
+	if dc.Spec.DatacenterName != "" {
+		return CleanupForKubernetes(dc.Spec.DatacenterName)
+	}
 	return CleanupForKubernetes(dc.Name)
 }
 

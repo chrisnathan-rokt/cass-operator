@@ -141,3 +141,63 @@ func TestUseClientImageEnforce(t *testing.T) {
 		assert.True(dc.UseClientImage())
 	}
 }
+
+func TestLabelResourceName(t *testing.T) {
+	assert := assert.New(t)
+
+	tests := []struct {
+		name           string
+		metadataName   string
+		specDCName     string
+		statusDCName   *string
+		expectedResult string
+	}{
+		{
+			name:           "uses status name when set",
+			metadataName:   "sandbox-dc1-uswe2",
+			specDCName:     "dc1-uswe2",
+			statusDCName:   ptr.To("dc1-uswe2"),
+			expectedResult: "dc1-uswe2",
+		},
+		{
+			name:           "uses spec datacenter name when status is nil",
+			metadataName:   "sandbox-dc1-uswe2",
+			specDCName:     "dc1-uswe2",
+			statusDCName:   nil,
+			expectedResult: "dc1-uswe2",
+		},
+		{
+			name:           "falls back to metadata name when spec and status are empty",
+			metadataName:   "sandbox-dc1-uswe2",
+			specDCName:     "",
+			statusDCName:   nil,
+			expectedResult: "sandbox-dc1-uswe2",
+		},
+		{
+			name:           "uses spec over metadata when status is empty string",
+			metadataName:   "sandbox-dc1-uswe2",
+			specDCName:     "dc1-uswe2",
+			statusDCName:   ptr.To(""),
+			expectedResult: "dc1-uswe2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dc := CassandraDatacenter{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: tt.metadataName,
+				},
+				Spec: CassandraDatacenterSpec{
+					DatacenterName: tt.specDCName,
+				},
+				Status: CassandraDatacenterStatus{
+					DatacenterName: tt.statusDCName,
+				},
+			}
+
+			result := dc.LabelResourceName()
+			assert.Equal(tt.expectedResult, result)
+		})
+	}
+}

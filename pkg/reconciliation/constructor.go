@@ -63,7 +63,8 @@ func setOperatorProgressStatus(rc *ReconciliationContext, newState api.ProgressS
 
 	if newState == api.ProgressReady {
 		if rc.Datacenter.Status.DatacenterName == nil {
-			rc.Datacenter.Status.DatacenterName = &rc.Datacenter.Name
+			dcName := rc.Datacenter.DatacenterName()
+			rc.Datacenter.Status.DatacenterName = &dcName
 		}
 	}
 	if err := rc.Client.Status().Patch(rc.Ctx, rc.Datacenter, patch); err != nil {
