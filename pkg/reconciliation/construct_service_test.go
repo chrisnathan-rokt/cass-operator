@@ -689,6 +689,45 @@ func TestCreateEndpointSlice(t *testing.T) {
 	}
 }
 
+func TestServiceSelectorMatchesPodLabelsWithDCNameOverride(t *testing.T) {
+	dc := &api.CassandraDatacenter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "sandbox-audiences-audi-usw2-emu",
+		},
+		Spec: api.CassandraDatacenterSpec{
+			ClusterName:    "test-cluster",
+			DatacenterName: "audi-usw2-emu",
+			ServerVersion:  "4.0.7",
+		},
+	}
+
+	// Simulate a pod with the label from Spec.DatacenterName (as old cass-operator versions set)
+	podLabels := map[string]string{
+		api.ClusterLabel:    "test-cluster",
+		api.DatacenterLabel: "audi-usw2-emu",
+	}
+
+	// The DC service selector should use DatacenterName(), which returns Spec.DatacenterName
+	dcService := newServiceForCassandraDatacenter(dc)
+	allPodsService := newAllPodsServiceForCassandraDatacenter(dc)
+
+	// Verify service selectors match the pod labels
+	for key, val := range dcService.Spec.Selector {
+		if podVal, ok := podLabels[key]; ok {
+			assert.Equal(t, podVal, val, "DC service selector key %s should match pod label", key)
+		}
+	}
+	for key, val := range allPodsService.Spec.Selector {
+		if podVal, ok := podLabels[key]; ok {
+			assert.Equal(t, podVal, val, "AllPods service selector key %s should match pod label", key)
+		}
+	}
+
+	// Specifically check the datacenter label in the service labels
+	assert.Equal(t, "audi-usw2-emu", dcService.Labels[api.DatacenterLabel])
+	assert.Equal(t, "audi-usw2-emu", allPodsService.Labels[api.DatacenterLabel])
+}
+
 func TestEndpointSlicesCorrectAddressSlice(t *testing.T) {
 	dc := &api.CassandraDatacenter{
 		ObjectMeta: metav1.ObjectMeta{

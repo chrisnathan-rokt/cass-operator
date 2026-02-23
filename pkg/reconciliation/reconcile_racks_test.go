@@ -4127,3 +4127,157 @@ func TestCheckDcPodDisruptionBudget(t *testing.T) {
 	pdb = &policyv1.PodDisruptionBudget{}
 	require.NoError(rc.Client.Get(rc.Ctx, pdbName, pdb))
 }
+
+func TestIsNodeStuckAfterTerminating_StartingPodNotStuck(t *testing.T) {
+	pod := &corev1.Pod{}
+	pod.Labels = map[string]string{
+		api.CassNodeState: "Starting",
+	}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: "cassandra",
+		LastTerminationState: corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{
+				FinishedAt: metav1.NewTime(time.Now().Add(-20 * time.Minute)),
+			},
+		},
+	}}
+	assert.False(t, isNodeStuckAfterTerminating(pod))
+}
+
+func TestIsNodeStuckAfterTerminating_RecentTerminationNotStuck(t *testing.T) {
+	pod := &corev1.Pod{}
+	pod.Labels = map[string]string{}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: "cassandra",
+		LastTerminationState: corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{
+				FinishedAt: metav1.NewTime(time.Now().Add(-2 * time.Minute)),
+			},
+		},
+	}}
+	assert.False(t, isNodeStuckAfterTerminating(pod))
+}
+
+func TestIsNodeStuckAfterTerminating_OldTerminationIsStuck(t *testing.T) {
+	pod := &corev1.Pod{}
+	pod.Labels = map[string]string{}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: "cassandra",
+		LastTerminationState: corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{
+				FinishedAt: metav1.NewTime(time.Now().Add(-15 * time.Minute)),
+			},
+		},
+	}}
+	assert.True(t, isNodeStuckAfterTerminating(pod))
+}
+
+func TestIsNodeStuckAfterTerminating_ReadyPodNotStuck(t *testing.T) {
+	pod := makeMockReadyStartedPod()
+	pod.Status.ContainerStatuses[0].LastTerminationState = corev1.ContainerState{
+		Terminated: &corev1.ContainerStateTerminated{
+			FinishedAt: metav1.NewTime(time.Now().Add(-20 * time.Minute)),
+		},
+	}
+	assert.False(t, isNodeStuckAfterTerminating(pod))
+}
+
+func TestIsNodeStuckAfterTerminating_NoTerminationNotStuck(t *testing.T) {
+	pod := &corev1.Pod{}
+	pod.Labels = map[string]string{}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: "cassandra",
+	}}
+	assert.False(t, isNodeStuckAfterTerminating(pod))
+}
+
+func TestHasBeenXMinutesSinceTermination(t *testing.T) {
+	tests := []struct {
+		name     string
+		minutes  int
+		ago      time.Duration
+		expected bool
+	}{
+		{
+			name:     "terminated long ago returns true",
+			minutes:  10,
+			ago:      15 * time.Minute,
+			expected: true,
+		},
+		{
+			name:     "terminated recently returns false",
+			minutes:  10,
+			ago:      5 * time.Minute,
+			expected: false,
+		},
+		{
+			name:     "terminated just under boundary returns false",
+			minutes:  10,
+			ago:      9*time.Minute + 55*time.Second,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pod := &corev1.Pod{}
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+				Name: "cassandra",
+				LastTerminationState: corev1.ContainerState{
+					Terminated: &corev1.ContainerStateTerminated{
+						FinishedAt: metav1.NewTime(time.Now().Add(-tt.ago)),
+					},
+				},
+			}}
+			assert.Equal(t, tt.expected, hasBeenXMinutesSinceTermination(tt.minutes, pod))
+		})
+	}
+}
+
+func TestHasBeenXMinutesSinceTermination_NoTermination(t *testing.T) {
+	pod := &corev1.Pod{}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: "cassandra",
+	}}
+	assert.False(t, hasBeenXMinutesSinceTermination(10, pod))
+}
+
+func TestHasBeenXMinutesSinceTermination_NoCassandraContainer(t *testing.T) {
+	pod := &corev1.Pod{}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: "sidecar",
+	}}
+	assert.False(t, hasBeenXMinutesSinceTermination(10, pod))
+}
+
+func TestDatacenterPodsWithIntermediateVersionLabels(t *testing.T) {
+	rc, _, cleanupMockScr := setupTest()
+	defer cleanupMockScr()
+	assert := assert.New(t)
+
+	// Simulate upgrade scenario: pods were created by an intermediate cass-operator
+	// version that used dc.Name instead of DatacenterName() for the DC label.
+	rc.Datacenter.Name = "sandbox-audiences-audi-usw2-emu"
+	rc.Datacenter.Spec.DatacenterName = "audi-usw2-emu"
+	rc.Datacenter.Spec.ClusterName = "test-cluster"
+
+	// Create pods labeled with dc.Name (as the buggy intermediate version would)
+	pod1 := &corev1.Pod{}
+	pod1.Name = "pod-0"
+	pod1.Labels = map[string]string{
+		api.ClusterLabel:    "test-cluster",
+		api.DatacenterLabel: "sandbox-audiences-audi-usw2-emu",
+	}
+	pod2 := &corev1.Pod{}
+	pod2.Name = "pod-1"
+	pod2.Labels = map[string]string{
+		api.ClusterLabel:    "test-cluster",
+		api.DatacenterLabel: "sandbox-audiences-audi-usw2-emu",
+	}
+
+	rc.clusterPods = []*corev1.Pod{pod1, pod2}
+
+	// datacenterPods() should find them via the alt selector
+	found := rc.datacenterPods()
+	assert.Equal(2, len(found))
+}

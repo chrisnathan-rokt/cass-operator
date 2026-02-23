@@ -142,6 +142,54 @@ func TestUseClientImageEnforce(t *testing.T) {
 	}
 }
 
+func TestGetDatacenterLabelsUsesDatacenterName(t *testing.T) {
+	assert := assert.New(t)
+
+	tests := []struct {
+		name          string
+		metadataName  string
+		specDCName    string
+		expectedLabel string
+	}{
+		{
+			name:          "uses metadata name when spec datacenter name is empty",
+			metadataName:  "dc1",
+			specDCName:    "",
+			expectedLabel: "dc1",
+		},
+		{
+			name:          "uses spec datacenter name when set",
+			metadataName:  "sandbox-audiences-audi-usw2-emu",
+			specDCName:    "audi-usw2-emu",
+			expectedLabel: "audi-usw2-emu",
+		},
+		{
+			name:          "same metadata and spec name",
+			metadataName:  "dc1",
+			specDCName:    "dc1",
+			expectedLabel: "dc1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dc := CassandraDatacenter{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: tt.metadataName,
+				},
+				Spec: CassandraDatacenterSpec{
+					ClusterName:    "test-cluster",
+					DatacenterName: tt.specDCName,
+				},
+			}
+
+			labels := dc.GetDatacenterLabels()
+			assert.Equal(tt.expectedLabel, labels[DatacenterLabel])
+			assert.Equal("test-cluster", labels[ClusterLabel])
+		})
+	}
+}
+
 func TestLabelResourceName(t *testing.T) {
 	assert := assert.New(t)
 

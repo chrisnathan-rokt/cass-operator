@@ -1351,6 +1351,16 @@ func hasBeenXMinutesSinceReady(x int, pod *corev1.Pod) bool {
 	return false
 }
 
+func hasBeenXMinutesSinceTermination(x int, pod *corev1.Pod) bool {
+	if status := getCassContainerStatus(pod); status != nil {
+		lastState := status.LastTerminationState
+		if lastState.Terminated != nil {
+			return hasBeenXMinutes(x, lastState.Terminated.FinishedAt.Time)
+		}
+	}
+	return false
+}
+
 func hasCassandraContainerTerminated(pod *corev1.Pod) bool {
 	if status := getCassContainerStatus(pod); status != nil {
 		lastState := status.LastTerminationState
@@ -1372,11 +1382,18 @@ func getCassContainerStatus(pod *corev1.Pod) *corev1.ContainerStatus {
 }
 
 func isNodeStuckAfterTerminating(pod *corev1.Pod) bool {
-	if isServerReady(pod) || isServerReadyToStart(pod) {
+	if isServerReady(pod) || isServerReadyToStart(pod) || isServerStarting(pod) {
 		return false
 	}
-
-	return hasCassandraContainerTerminated(pod)
+	if !hasCassandraContainerTerminated(pod) {
+		return false
+	}
+	// Grace period: during rolling restarts, liveness probes may kill Cassandra
+	// before it finishes bootstrapping. Each restart updates FinishedAt, so this
+	// only fires when the container hasn't been restarted recently (kubelet gave up
+	// or pod is in a non-recoverable state). Matches isNodeStuckAfterLosingReadiness
+	// grace period.
+	return hasBeenXMinutesSinceTermination(10, pod)
 }
 
 func isNodeStuckAfterLosingReadiness(pod *corev1.Pod) bool {
@@ -2646,14 +2663,20 @@ func (rc *ReconciliationContext) datacenterPods() []*corev1.Pod {
 	dcSelector := rc.Datacenter.GetDatacenterLabels()
 	dcPods := FilterPodListByLabels(rc.clusterPods, dcSelector)
 
-	if rc.Datacenter.Status.MetadataVersion < 1 && rc.Datacenter.Status.ObservedGeneration > 0 &&
-		rc.Datacenter.Status.DatacenterName != nil && *rc.Datacenter.Status.DatacenterName == rc.Datacenter.Spec.DatacenterName &&
-		rc.Datacenter.Spec.DatacenterName != rc.Datacenter.Name {
-		rc.ReqLogger.Info("Fetching datacenter pods with the old metadata version labels")
-
-		if dcSelector[api.DatacenterLabel] != api.CleanLabelValue(rc.Datacenter.Spec.DatacenterName) {
-			dcSelector[api.DatacenterLabel] = api.CleanLabelValue(rc.Datacenter.Spec.DatacenterName)
-			dcPods = append(dcPods, FilterPodListByLabels(rc.clusterPods, dcSelector)...)
+	// Also search for pods labeled with dc.Name, in case pods were created by
+	// an intermediate version that used dc.Name instead of DatacenterName().
+	if rc.Datacenter.Spec.DatacenterName != "" && rc.Datacenter.Spec.DatacenterName != rc.Datacenter.Name {
+		altSelector := rc.Datacenter.GetClusterLabels()
+		altSelector[api.DatacenterLabel] = api.CleanLabelValue(rc.Datacenter.Name)
+		altPods := FilterPodListByLabels(rc.clusterPods, altSelector)
+		existing := make(map[string]bool)
+		for _, p := range dcPods {
+			existing[p.Name] = true
+		}
+		for _, p := range altPods {
+			if !existing[p.Name] {
+				dcPods = append(dcPods, p)
+			}
 		}
 	}
 
